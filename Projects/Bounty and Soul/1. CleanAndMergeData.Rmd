@@ -1,0 +1,103 @@
+---
+title: "CleanAndMergeData"
+author: "Holly Rosson"
+date: "2025-03-18"
+output: pdf_document
+---
+
+**CDC PLACES** data contains percent estimates of multiple health conditions for all census tracts across the United States. Similarly, CDC’s **Social Vulnerability Index** contains count estimates of multiple social vulnerability variables for all census tracts across the United States.  US Census Bureau's **Median Family Income** is also used here.  
+
+Places is located at:  [Places](https://data.cdc.gov/500-Cities-Places/PLACES-Local-Data-for-Better-Health-Census-Tract-D/cwsq-ngmh/about_data), and [Social Vulnerability](https://www.atsdr.cdc.gov/place-health/php/svi/svi-data-documentation-download.html).  Median Family income is located at: [Census](https://data.census.gov/table?q=B19013&g=040XX00US37$1400000 ). Here I've already subsetted North Carolina data for all. 
+```{r}
+library(tidyverse)
+svi<-read.csv("NCSVI2022.csv")
+places<-read.csv("NCPLACES2024.csv")
+income<-read.csv("NCINCOME2023.csv")
+head(svi)
+head(places)
+head(income)
+```
+Ultimately, we want to join all three datasets together by census tract.  The census data has too much information in the census tract column, so I'll fix that here by saving the last 11 digits of each entry in the census tract column:
+
+
+```{r}
+income<-income[-1,-5]
+names(income)<-c("CensusTract", "Name", "Median_Family_Income", "MarginError")
+```
+
+```{r}
+all(nchar(income$CensusTract)==20)
+income$CensusTract<-as.numeric(substr(income$CensusTract, 10, 20))
+
+```
+```{r}
+head(income)
+```
+```{r}
+class(income$Median_Family_Income)
+income$Median_Family_Income<-as.numeric(income$Median_Family_Income)
+index<-which(is.na(income$Median_Family_Income))
+income$Median_Family_Income[index]<-mean(income$Median_Family_Income, na.rm=T)
+```
+
+
+
+And, we'll have all 3 of the files have the same column name for the census tract:
+
+```{r}
+names(places)[7]<-"CensusTract"
+names(svi)[6]<-"CensusTract"
+```
+
+
+
+Next, let's look at how the data is organized, particularly related to the census tracts. 
+
+```{r}
+length(unique(svi$CensusTract))
+length(unique(places$CensusTract))
+length(unique(income$CensusTract))
+```
+So, for some reason the census tracts do not match up.  New ones were created in later years, and it looks like **places** used older census tracts.
+
+Let's consider other ways the data is organized:
+
+```{r}
+nrow(svi)
+nrow(places)
+```
+Places has a lot more rows because it is in *long* format. Instead of having multiple rows for each census tract (one for each disease measure), I'd really like one row per census tract, with a new column for each disease measure (this is how svi is organized).  First, we'll just select the columns of interest:
+
+```{r}
+places<-places%>%select(CensusTract, CountyName, MeasureId,  Data_Value)
+
+#Measure is the "disease" or whatever they are measuring.  Data value unit is the units they are measuring in (pretty sure this is all %))
+```
+
+Then convert to wide format. 
+```{r}
+places<- places%>% 
+  spread(MeasureId, Data_Value )
+
+```
+
+Now there should be one row per census tract. Note there (for NC anyway) slightly more tracts in SVI.  
+
+```{r}
+nrow(places)
+nrow(svi)
+nrow(income)
+```
+Let's go ahead and join the 2 data sets. 
+
+```{r}
+temp<-places%>% full_join(svi, by=c("CensusTract"="CensusTract"))
+final<-temp%>%full_join(income, by=c("CensusTract"="CensusTract"))
+nrow(final)
+```
+We'll go ahead and write this as the *final* merged dataset. 
+
+```{r}
+write.csv(final, "mergeddata.csv")
+```
+
