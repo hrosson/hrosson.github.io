@@ -1,0 +1,173 @@
+---
+title: "Visualizations of Social Vulnerability and Chronic Disease in Western NC"
+author: "Holly Rosson"
+date: "2024-03-01"
+output: html_document
+---
+
+In previous work we read in CDC social vulnerability and chronic disease data, along with income data from the US Census Bureau.  We now read in the merged data for use in clustering. 
+
+```{r}
+library(tidyverse)
+data<-read.csv("mergeddata.csv")
+data<-data[, -1]
+
+
+```
+The food bank we were working with served people in Buncombe, Henderson, and McDowell Counties, so I will subset those first. 
+
+
+```{r}
+data<-data%>%filter(CountyName=="Henderson"|CountyName=="McDowell"|CountyName=="Buncombe")
+```
+
+Next, we'll subset the variables of interest.  Since we were working with a food bank that provides healthy food for people with chronic conditions, we subsetted cancer, heart disease, obesity, and diabetes, as these conditions seemed most likely to be affected by diet. 
+
+The resulting dataset has 106 rows, each corresponding to a single census tract in one of the above mentioned counties, and 12 columns.  The 12 columns are:  County Name, Census Tract;  percentages of:  Cancer, Heart Disease, Diabetes, Obesity, Unemployed, Minority, Uninsured, Disabled; Total Population and Median Family Income.  
+
+```{r}
+options(digits=2)
+data<-na.omit(data)
+data$Uninsured<-data$E_UNINSUR/data$E_TOTPOP*100
+data$Unemployed<-data$E_UNEMP/data$E_TOTPOP*100
+data$Minority<-data$E_MINRTY/data$E_TOTPOP*100
+```
+
+```{r}
+data<-data%>%select(CountyName, CensusTract, Diabetes=DIABETES, Cancer=CANCER, Obesity=OBESITY, HeartDisease=CHD, Unemployed,  Uninsured, Disabled=DISABILITY, Minority, MedianFamilyIncome=Median_Family_Income, TotPop=E_TOTPOP)
+
+head(data)
+```
+
+  
+```{r}
+library(corrplot)
+
+CDisease<-cor(data[, 3:6])
+CSVI<-cor(data[,7:11])
+
+corrplot(CDisease,method="ellipse")
+corrplot(CSVI, method="ellipse")
+```
+Before we start clustering, we will create a function that will normalize the columns, so that all variables weigh equally in the clustering algorithm.  
+
+```{r}
+normalize<-function(vec){
+  return((vec-min(vec))/(max(vec)-min(vec)))
+}
+
+data.norm<-data%>%mutate( Diabetes=normalize(Diabetes), Cancer=normalize(Cancer), Obesity=normalize(Obesity),  HeartDisease=normalize(HeartDisease), Uninsured=normalize(Uninsured), Unemployed=normalize(Unemployed),Disabled=normalize(Disabled), Minority=normalize(Minority), MedianFamilyIncome=normalize(MedianFamilyIncome))
+```
+Next, we will use the elbow method to determine the optimal number of clusters to use.
+
+
+```{r}
+set.seed(13024)
+total.wi.ss<-c()
+for(i in 1:10){
+  total.wi.ss[i]<-kmeans(data.norm[,c(3,4,5,6,7,8,10,11)], centers=i)$tot.withinss
+}
+total.wi.ss
+plot(x=1:10, y=total.wi.ss[1:10], type='b', lwd=5, xlab="Numbers of Clusters", ylab="Sums of Squares within Clusters")
+
+```
+ The most pronounced elbow is at 3 clusters, so we'll choose k=3.  
+
+```{r}
+result<-kmeans(data.norm[, 3:11], centers=3)
+
+```
+Next, we'll add a "cluster column" to the data dataset so we can see which cluster each census tract was assigned to.
+
+
+```{r}
+data$Cluster<-result$cluster
+```
+
+As a first step in our analysis of the census tracts, let's get the average values of all of the conditions, according to cluster. 
+
+```{r}
+diseases<-data%>% group_by(Cluster)%>%summarize(Diabetes=mean(Diabetes), Cancer=mean(Cancer),Obesity=mean(Obesity) , HeartDisease=mean(HeartDisease))
+
+SVI<-data%>%group_by(Cluster)%>%summarize(Income=median(MedianFamilyIncome), Unemployed=mean(Unemployed), Uninsured=mean(Uninsured), Minority=mean(Minority))
+
+Pop<-data%>%group_by(Cluster)%>%summarize(Number_of_Census_Tracts=length(CensusTract), Total_Population=sum(TotPop), Mean_Median_Family_Income=mean(MedianFamilyIncome))
+
+diseases
+SVI
+Pop
+```
+So, cluster 3 has high diabetes, low cancer, high obesity, and lowest income, high social vulnerabilty variables. 
+
+Cluster 2 has midlevel cancer and highest income, lowest diabetes and obesity.   
+
+Cluster 1 has highest cancer and mid level income. 
+
+It's probably easist to visualize what's happening instead. 
+
+
+
+Cluster visualizations. First convert to "long" format.
+ 
+
+```{r}
+data$Cluster<-as.factor(data$Cluster)
+Health<-data%>%gather(Health, HealthValue, 3:6, factor_key=TRUE)
+SVI<-data%>%gather(SVI, SVIValue, 7:10, factor_key=TRUE)
+```
+
+```{r}
+ggplot(data, aes(x=Cluster, y=MedianFamilyIncome, fill=Cluster))+geom_violin()+labs(title="Median Family Income by Cluster", x="Cluster", y="Median Family Income")+stat_summary(fun="mean", geom="crossbar", width=.5, color="black")
+```
+
+
+
+```{r}
+ggplot(Health, aes(x=Health, y=HealthValue, fill=Cluster))+geom_boxplot() +labs(title="Health Conditions by Cluster", x="Condition", y="Percent")
+```
+
+```{r}
+ggplot(SVI, aes(x=SVI, y=SVIValue, fill=Cluster))+geom_boxplot()+labs(title="Social Vulnerability Variables by Cluster", x="Social Vulnerability Variable", y="Percent")
+```
+
+
+```{r}
+library(factoextra)
+```
+```{r}
+graph<-fviz_cluster(result, data=data[, c(3,4,5,6,7,8,9, 10,11)],ellipse.type="euclid", pointsize=1)
+graph
+```
+```{r}
+ outliers<-c(45, 70, 81, 87, 24, 90, 4, 15, 99)
+data$Outliers<-ifelse((rownames(data)=="45"|rownames(data)=="70"| rownames(data)=="81"|rownames(data)=="87"|rownames(data)=="24"|rownames(data)=="90"|rownames(data)=="4"|rownames(data)=="15"|rownames(data)=="99"), "yes", "no")
+which(data$Outliers=="yes")
+```
+```{r}
+data.pca<-prcomp(data.norm[,3:11])
+data.pca
+ 
+```
+ 
+```{r}
+
+fviz_pca_biplot(data.pca, habillage=as.factor(data$Cluster),  col.var="black")+theme(
+  panel.background = element_rect(fill = "Gray95",
+                                colour = "Gray95",
+                                size = 0.5, linetype = "solid"),
+  panel.grid.major = element_line(size = 0.5, linetype = 'solid',
+                                colour = "white"), 
+  panel.grid.minor = element_line(size = 0.25, linetype = 'solid',
+                                colour = "white")
+  )
+```
+```{r}
+ outliers<-c(45, 70, 99, 81, 87, 24, 4)
+data$Outliers<-ifelse((rownames(data)=="45"|rownames(data)=="70"| rownames(data)=="81"|rownames(data)=="87"|rownames(data)=="24"|rownames(data)=="90"|rownames(data)=="4"|rownames(data)=="15"|rownames(data)=="99"), "yes", "no")
+which(data$Outliers=="yes")
+
+```
+```{r}
+write.csv(data, "health&socialvulnerability_by_cluster.csv")
+```
+
